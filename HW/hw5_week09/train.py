@@ -21,6 +21,14 @@ NROF_GLU = 2
 TRAIN_PATH = 'train_adult.pickle'
 VALID_PATH = 'valid_adult.pickle'
 
+def roc_auc_compute_fn(y_preds: torch.Tensor, y_targets: torch.Tensor) -> float:
+    from sklearn.metrics import roc_auc_score
+
+    y_true = y_targets.cpu().detach().numpy()
+    y_pred = y_preds.cpu().detach().numpy()
+    return roc_auc_score(y_true, y_pred)
+
+
 def sparse_loss_function(mask, eps=1e-32):
     
     first_dim, second_dim, _ = mask.shape
@@ -61,7 +69,6 @@ class Tab:
                                  numeric_columns=self.train_dataset.numeric_columns)
 
         self.loss = torch.nn.BCEWithLogitsLoss()
-        self.accuracy = Accuracy()
         self.optimizer = optim.Adam(self.network.parameters(), lr=LEARNING_RATE)
 
         return
@@ -124,26 +131,26 @@ class Tab:
 
                     total_loss.backward(retain_graph=True)
                     label = label.long()
-                    acc = self.accuracy(output, label).item()
+                    roc_auc = roc_auc_compute_fn(output, label)
 
                     # Update weights with gradients
                     self.optimizer.step()
 
                 self.train_writer.add_scalar('CrossEntropyLoss', loss, self.step)
-                self.train_writer.add_scalar('Accuracy', acc, self.step)
+                self.train_writer.add_scalar('ROC-AUC', roc_auc, self.step)
 
                 self.step += 1
 
                 if self.step % 20 == 0:
-                    print('EPOCH %d STEP %d : train_loss: %f train_acc: %f' %
-                          (epoch, self.step, loss.item(), acc))
+                    print('EPOCH %d STEP %d : train_loss: %f train_roc_auc: %f' %
+                          (epoch, self.step, loss.item(), roc_auc))
 
             # self.train_writer.add_histogram('hidden_layer', self.network.linear1.weight.data, self.step)
 
             # Run validation
             self.network.eval()
             
-            correct, total = 0, 0
+            y_true, y_pred = torch.Tensor(), torch.Tensor()
 
             for features, label in self.valid_loader:
 
@@ -153,12 +160,12 @@ class Tab:
                 
                 label = label.long()
                 
-                total += output.shape[0]
-                correct += (output == label).sum().item()
-                
-            acс = correct / total
-            self.valid_writer.add_scalar('Accuracy', acc, epoch)
+                y_true = torch.cat([y_true, label.flatten()])
+                y_pred = torch.cat([y_pred, output.flatten()])
+                                
+            roc_auc = roc_auc_compute_fn(y_pred, y_true)
+            self.valid_writer.add_scalar('ROC_AUC', roc_auc, epoch)
 
-            print('EPOCH %d : valid_acc: %f' % (epoch, acc))
+            print('EPOCH %d : valid_roc_auc: %f' % (epoch, roc_auc))
 
         return
